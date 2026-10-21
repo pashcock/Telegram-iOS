@@ -1,0 +1,74 @@
+# Manual runs only; keep this configuration in the fork CI branch.
+workflows:
+  rich-message-regression:
+    name: Rich Message regression tests
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      xcode: '26.6'
+      vars:
+        REGRESSION_RESULTS: rich-message-results
+        REGRESSION_BAZEL_ROOT: /tmp/rich-message-bazel
+    scripts:
+    - name: Record build environment
+      script: |
+        set -euo pipefail
+        mkdir -p "$REGRESSION_RESULTS"
+        git rev-parse HEAD | tee "$REGRESSION_RESULTS/source-sha.txt"
+        xcodebuild -version | tee "$REGRESSION_RESULTS/xcode.txt"
+        xcrun simctl list devices available | tee "$REGRESSION_RESULTS/simulators.txt"
+        sw_vers
+        df -h /
+        sysctl hw.memsize hw.ncpu
+    - name: Fetch upstream submodules
+      script: |
+        set -euo pipefail
+        # Relative submodule URLs belong to TelegramMessenger, not the fork.
+        git remote set-url origin https://github.com/TelegramMessenger/Telegram-iOS.git
+        git submodule sync --recursive
+        git submodule update --init --recursive --depth 1 --jobs 4
+    - name: Configure simulator-only regression run
+      script: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        from pathlib import Path
+        configuration = {
+            "bundle_id": "org.pashcock.RichMessageRegression",
+            "api_id": "0", "api_hash": "0" * 32, "team_id": "",
+            "app_center_id": "0", "is_internal_build": "true",
+            "is_appstore_build": "false", "appstore_id": "0",
+            "app_specific_url_scheme": "rich-message-regression",
+            "premium_iap_product_id": "", "enable_siri": False, "enable_icloud": False,
+        }
+        Path("build-input").mkdir(exist_ok=True)
+        Path("build-input/ci-simulator.json").write_text(json.dumps(configuration))
+        with Path(".bazelrc").open("a") as output:
+            output.write("\nbuild --jobs=3\nbuild --local_resources=cpu=3\n")
+            output.write("build --local_resources=memory=6144\nbuild --worker_max_instances=1\n")
+            output.write("test --test_filter=InstantPageV2NestedButtonTests\ntest --test_output=all\n")
+        PY
+    - name: Build and run nested button XCTest cases
+      script: |
+        set -euo pipefail
+        collect_reports() {
+          local result=$?
+          trap - EXIT
+          set +e
+          mkdir -p "$REGRESSION_RESULTS"
+          if [[ -d bazel-testlogs/submodules/InstantPageUI/InstantPageUITests ]]; then
+            cp -RL bazel-testlogs/submodules/InstantPageUI/InstantPageUITests "$REGRESSION_RESULTS/xctest"
+          fi
+          df -h / > "$REGRESSION_RESULTS/disk.txt"
+          exit "$result"
+        }
+        trap collect_reports EXIT
+        python3 -u build-system/Make/Make.py \
+          --bazelUserRoot="$REGRESSION_BAZEL_ROOT" \
+          test \
+          --configurationPath=build-input/ci-simulator.json \
+          --xcodeManagedCodesigning \
+          --target=//submodules/InstantPageUI:InstantPageUITests \
+          2>&1 | tee "$REGRESSION_RESULTS/build-and-test.log"
+    artifacts:
+    - rich-message-results/**
