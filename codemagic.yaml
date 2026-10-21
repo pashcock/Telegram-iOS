@@ -10,6 +10,7 @@ workflows:
         CM_RECURSIVE_SUBMODULE_INIT: "false"
         REGRESSION_RESULTS: rich-message-results
         REGRESSION_BAZEL_ROOT: /tmp/rich-message-bazel
+        REGRESSION_ACTION_PATH: /bin:/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/opt/homebrew/bin
     scripts:
     - name: Record build environment
       script: |
@@ -44,11 +45,25 @@ workflows:
         xcrun metal --version 2>&1 | tee "$REGRESSION_RESULTS/metal-version.txt"
         # Bazel actions use a clean environment; verify the compiler there too.
         env -i PATH=/bin:/usr/bin:/usr/local/bin /usr/bin/xcrun metal --version
+    - name: Verify native build tools
+      script: |
+        set -euo pipefail
+        if ! env -i PATH="$REGRESSION_ACTION_PATH" /bin/sh -c 'command -v ccache'; then
+          brew install ccache
+        fi
+        # TDLib invokes these by name inside Bazel's clean action environment.
+        env -i PATH="$REGRESSION_ACTION_PATH" /bin/sh -ec '
+          command -v sysctl
+          sysctl -n hw.ncpu
+          command -v ccache
+          ccache --version
+        ' 2>&1 | tee "$REGRESSION_RESULTS/native-build-tools.txt"
     - name: Configure simulator-only regression run
       script: |
         set -euo pipefail
         python3 - <<'PY'
         import json
+        import os
         from pathlib import Path
         configuration = {
             "bundle_id": "org.pashcock.RichMessageRegression",
@@ -60,7 +75,10 @@ workflows:
         }
         Path("build-input").mkdir(exist_ok=True)
         Path("build-input/ci-simulator.json").write_text(json.dumps(configuration))
+        action_path = os.environ["REGRESSION_ACTION_PATH"]
         with Path(".bazelrc").open("a") as output:
+            output.write(f"\nbuild --action_env=PATH={action_path}\n")
+            output.write(f"build --host_action_env=PATH={action_path}\n")
             output.write("\nbuild --jobs=3\nbuild --local_resources=cpu=3\n")
             output.write("build --local_resources=memory=6144\nbuild --worker_max_instances=1\n")
             output.write("test --test_filter=InstantPageV2NestedButtonTests\ntest --test_output=all\n")
