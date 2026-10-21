@@ -35,6 +35,15 @@ workflows:
           exit 1
         fi
         test -s third-party/wallet-engine/wallet-engine/vendor/ton/resources/mnemonics/wordlist_en.txt
+    - name: Install and verify Metal toolchain
+      script: |
+        set -euo pipefail
+        if ! xcrun metal --version; then
+          xcodebuild -downloadComponent metalToolchain 2>&1 | tee "$REGRESSION_RESULTS/metal-install.log"
+        fi
+        xcrun metal --version 2>&1 | tee "$REGRESSION_RESULTS/metal-version.txt"
+        # Bazel actions use a clean environment; verify the compiler there too.
+        env -i PATH=/bin:/usr/bin:/usr/local/bin /usr/bin/xcrun metal --version
     - name: Configure simulator-only regression run
       script: |
         set -euo pipefail
