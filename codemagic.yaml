@@ -7,6 +7,7 @@ workflows:
     environment:
       xcode: '26.6'
       vars:
+        CM_RECURSIVE_SUBMODULE_INIT: "false"
         REGRESSION_RESULTS: rich-message-results
         REGRESSION_BAZEL_ROOT: /tmp/rich-message-bazel
     scripts:
@@ -26,7 +27,14 @@ workflows:
         # Relative submodule URLs belong to TelegramMessenger, not the fork.
         git remote set-url origin https://github.com/TelegramMessenger/Telegram-iOS.git
         git submodule sync --recursive
-        git submodule update --init --recursive --depth 1 --jobs 4
+        # Force checkout also repairs worktrees left empty by interrupted cloning.
+        git submodule update --init --recursive --force --depth 1 --jobs 4
+        git submodule status --recursive | tee "$REGRESSION_RESULTS/submodules.txt"
+        if grep -Eq '^[+U-]' "$REGRESSION_RESULTS/submodules.txt"; then
+          echo "Submodule checkout does not match the pinned revisions" >&2
+          exit 1
+        fi
+        test -s third-party/wallet-engine/wallet-engine/vendor/ton/resources/mnemonics/wordlist_en.txt
     - name: Configure simulator-only regression run
       script: |
         set -euo pipefail
