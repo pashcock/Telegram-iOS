@@ -1,7 +1,7 @@
 # Manual runs only; keep this configuration in the fork CI branch.
 workflows:
   rich-message-regression:
-    name: Rich Message regression tests
+    name: Rich Message extended regressions
     instance_type: mac_mini_m2
     max_build_duration: 120
     environment:
@@ -81,9 +81,33 @@ workflows:
             output.write(f"build --host_action_env=PATH={action_path}\n")
             output.write("\nbuild --jobs=3\nbuild --local_resources=cpu=3\n")
             output.write("build --local_resources=memory=6144\nbuild --worker_max_instances=1\n")
-            output.write("test --test_filter=InstantPageV2NestedButtonTests\ntest --test_output=all\n")
+            output.write("test --test_output=all\n")
         PY
-    - name: Build and run nested button XCTest cases
+    - name: Reproduce caption failures before the fix
+      script: |
+        set -euo pipefail
+        caption_patch=/tmp/rich-message-caption.patch
+        git diff 1aae4c0af8^ 1aae4c0af8 -- submodules/InstantPageUI/Sources/InstantPageRenderer.swift > "$caption_patch"
+        git apply --reverse "$caption_patch"
+        trap 'git apply "$caption_patch"' EXIT
+        mkdir -p "$REGRESSION_RESULTS/before-caption-fix"
+        set +e
+        python3 -u build-system/Make/Make.py \
+          --bazelUserRoot="$REGRESSION_BAZEL_ROOT" test \
+          --configurationPath=build-input/ci-simulator.json \
+          --xcodeManagedCodesigning \
+          --target=//submodules/InstantPageUI:InstantPageUITests \
+          2>&1 | tee "$REGRESSION_RESULTS/before-caption-fix/build.log"
+        baseline_status=${PIPESTATUS[0]}
+        set -e
+        cp -RL bazel-testlogs/submodules/InstantPageUI/InstantPageUITests "$REGRESSION_RESULTS/before-caption-fix/xctest"
+        test "$baseline_status" -ne 0
+        # A compile failure is not reproduction: require the specific XCTest failures.
+        grep -E "Test Case .*testLinksWithShortCaption.* failed" "$REGRESSION_RESULTS/before-caption-fix/xctest/test.log"
+        grep -E "Test Case .*testLinksWithTallCaption.* failed" "$REGRESSION_RESULTS/before-caption-fix/xctest/test.log"
+        git apply "$caption_patch"
+        trap - EXIT
+    - name: Build and run all InstantPageUI XCTest cases
       script: |
         set -euo pipefail
         collect_reports() {
